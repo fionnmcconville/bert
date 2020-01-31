@@ -71,7 +71,7 @@ class TrainingInstance(object):
   def __init__(self, tokens, masked_lm_positions, masked_lm_labels, #segment_ids
                is_random_next):
     self.tokens = tokens
-    #self.segment_ids = segment_ids
+    self.segment_ids = segment_ids
     self.is_random_next = is_random_next
     self.masked_lm_positions = masked_lm_positions
     self.masked_lm_labels = masked_lm_labels
@@ -80,7 +80,7 @@ class TrainingInstance(object):
     s = ""
     s += "tokens: %s\n" % (" ".join(
         [tokenization.printable_text(x) for x in self.tokens]))
-    #s += "segment_ids: %s\n" % (" ".join([str(x) for x in self.segment_ids]))
+    s += "segment_ids: %s\n" % (" ".join([str(x) for x in self.segment_ids]))
     s += "is_random_next: %s\n" % self.is_random_next
     s += "masked_lm_positions: %s\n" % (" ".join(
         [str(x) for x in self.masked_lm_positions]))
@@ -106,17 +106,17 @@ def write_instance_to_example_files(instances, tokenizer, max_seq_length,
   for (inst_index, instance) in enumerate(instances):
     input_ids = tokenizer.convert_tokens_to_ids(instance.tokens)
     input_mask = [1] * len(input_ids)
-    #segment_ids = list(instance.segment_ids)
+    segment_ids = list(instance.segment_ids)
     assert len(input_ids) <= max_seq_length
 
     while len(input_ids) < max_seq_length:
       input_ids.append(0)
       input_mask.append(0)
-      #segment_ids.append(0)
+      segment_ids.append(0)
 
     assert len(input_ids) == max_seq_length
     assert len(input_mask) == max_seq_length
-    #assert len(segment_ids) == max_seq_length
+    assert len(segment_ids) == max_seq_length
 
     masked_lm_positions = list(instance.masked_lm_positions)
     masked_lm_ids = tokenizer.convert_tokens_to_ids(instance.masked_lm_labels)
@@ -132,7 +132,7 @@ def write_instance_to_example_files(instances, tokenizer, max_seq_length,
     features = collections.OrderedDict()
     features["input_ids"] = create_int_feature(input_ids)
     features["input_mask"] = create_int_feature(input_mask)
-    #features["segment_ids"] = create_int_feature(segment_ids)
+    features["segment_ids"] = create_int_feature(segment_ids)
     features["masked_lm_positions"] = create_int_feature(masked_lm_positions)
     features["masked_lm_ids"] = create_int_feature(masked_lm_ids)
     features["masked_lm_weights"] = create_float_feature(masked_lm_weights)
@@ -305,28 +305,28 @@ def create_instances_from_document(
         assert len(tokens_b) >= 1
 
         tokens = []
-        #segment_ids = []
+        segment_ids = []
         tokens.append("[CLS]")
-        #segment_ids.append(0)
+        segment_ids.append(0)
         for token in tokens_a:
           tokens.append(token)
-          #segment_ids.append(0)
+          segment_ids.append(0)
 
         tokens.append("[SEP]")
-        #segment_ids.append(0)
+        segment_ids.append(0)
 
         for token in tokens_b:
           tokens.append(token)
-          #segment_ids.append(1)
+          segment_ids.append(0)
         tokens.append("[SEP]")
-        #segment_ids.append(1)
+        segment_ids.append(0)
 
         (tokens, masked_lm_positions,
          masked_lm_labels) = create_masked_lm_predictions(
              tokens, masked_lm_prob, max_predictions_per_seq, vocab_words, rng)
         instance = TrainingInstance(
             tokens=tokens,
-            #segment_ids=segment_ids,
+            segment_ids=segment_ids,
             is_random_next=is_random_next,
             masked_lm_positions=masked_lm_positions,
             masked_lm_labels=masked_lm_labels)
