@@ -68,7 +68,7 @@ flags.DEFINE_float(
 class TrainingInstance(object):
   """A single training instance (sentence pair)."""
 
-  def __init__(self, tokens, masked_lm_positions, masked_lm_labels, segment_ids
+  def __init__(self, tokens, masked_lm_positions, masked_lm_labels, segment_ids,
                is_random_next):
     self.tokens = tokens
     self.segment_ids = segment_ids
