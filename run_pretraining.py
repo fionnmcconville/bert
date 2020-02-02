@@ -201,8 +201,8 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
             weights=masked_lm_weights)
         masked_lm_mean_loss = tf.metrics.mean(
             values=masked_lm_example_loss, weights=masked_lm_weights)
-
-       """ next_sentence_log_probs = tf.reshape(
+        """
+        next_sentence_log_probs = tf.reshape(
             next_sentence_log_probs, [-1, next_sentence_log_probs.shape[-1]])
         next_sentence_predictions = tf.argmax(
             next_sentence_log_probs, axis=-1, output_type=tf.int32)
@@ -210,7 +210,8 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
         next_sentence_accuracy = tf.metrics.accuracy(
             labels=next_sentence_labels, predictions=next_sentence_predictions)
         next_sentence_mean_loss = tf.metrics.mean(
-            values=next_sentence_example_loss) """
+            values=next_sentence_example_loss)
+        """
 
         return {
             "masked_lm_accuracy": masked_lm_accuracy,
@@ -281,8 +282,8 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
 
   return (loss, per_example_loss, log_probs)
 
-
-""" def get_next_sentence_output(bert_config, input_tensor, labels):
+"""
+def get_next_sentence_output(bert_config, input_tensor, labels):
   #Get loss and log probs for the next sentence prediction.
 
   # Simple binary classification. Note that 0 is "next sentence" and 1 is
@@ -302,7 +303,8 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
     one_hot_labels = tf.one_hot(labels, depth=2, dtype=tf.float32)
     per_example_loss = -tf.reduce_sum(one_hot_labels * log_probs, axis=-1)
     loss = tf.reduce_mean(per_example_loss)
-    return (loss, per_example_loss, log_probs) """
+    return (loss, per_example_loss, log_probs)
+    """
 
 
 def gather_indexes(sequence_tensor, positions):
