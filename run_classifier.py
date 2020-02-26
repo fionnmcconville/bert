@@ -680,16 +680,16 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
       def metric_fn(per_example_loss, label_ids, logits, is_real_example):
         predictions = tf.argmax(logits, axis=-1, output_type=tf.int32)
 
-        accuracy = tf.metrics.accuracy(labels=label_ids, predictions=predictions, weights=is_real_example)
-        loss = tf.metrics.mean(values=per_example_loss, weights=is_real_example)
+        accuracy = tf.compat.v1.metrics.accuracy(labels=label_ids, predictions=predictions, weights=is_real_example)
+        loss = tf.compat.v1.metrics.mean(values=per_example_loss, weights=is_real_example)
         f1_score = tf.contrib.metrics.f1_score(label_ids, predictions)
-        auc = tf.metrics.auc( label_ids, predictions)
-        recall = tf.metrics.recall(label_ids, predictions)
-        precision = tf.metrics.precision(label_ids, predictions)
-        true_pos = tf.metrics.true_positives(label_ids, predictions)
-        true_neg = tf.metrics.true_negatives(label_ids, predictions)
-        false_pos = tf.metrics.false_positives(label_ids, predictions)  
-        false_neg = tf.metrics.false_negatives(label_ids, predictions)
+        auc = tf.compat.v1.metrics.auc(label_ids, predictions)
+        recall = tf.compat.v1.metrics.recall(label_ids, predictions)
+        precision = tf.compat.v1.metrics.precision(label_ids, predictions)
+        true_pos = tf.compat.v1.metrics.true_positives(label_ids, predictions)
+        true_neg = tf.compat.v1.metrics.true_negatives(label_ids, predictions)
+        false_pos = tf.compat.v1.metrics.false_positives(label_ids, predictions)  
+        false_neg = tf.compat.v1.metrics.false_negatives(label_ids, predictions)
         return {
             "eval_accuracy": accuracy,
             "eval_loss": loss,
