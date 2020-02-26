@@ -123,6 +123,7 @@ flags.DEFINE_integer(
     "num_tpu_cores", 8,
     "Only used if `use_tpu` is True. Total number of TPU cores to use.")
 
+SEED = 3060;
 
 class InputExample(object):
   """A single training/test example for simple sequence classification."""
@@ -587,13 +588,16 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
   #
   # If you want to use the token-level output, use model.get_sequence_output()
   # instead.
+  
+  #output_layer = model.get_sequence_output()
   output_layer = model.get_pooled_output()
 
   hidden_size = output_layer.shape[-1].value
 
+  #Operation level seed to initialize the same variables each time
   output_weights = tf.get_variable(
       "output_weights", [num_labels, hidden_size],
-      initializer=tf.truncated_normal_initializer(stddev=0.02))
+      initializer=tf.truncated_normal_initializer(stddev=0.02, seed = SEED)) #Operation level seed
 
   output_bias = tf.get_variable(
       "output_bias", [num_labels], initializer=tf.zeros_initializer())
@@ -601,14 +605,14 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
   with tf.variable_scope("loss"):
     if is_training:
       # I.e., 0.1 dropout
-      output_layer = tf.nn.dropout(output_layer, keep_prob=0.9)
+      output_layer = tf.nn.dropout(output_layer, keep_prob=0.9, seed = SEED) #Op level seed
 
     logits = tf.matmul(output_layer, output_weights, transpose_b=True)
     logits = tf.nn.bias_add(logits, output_bias)
-    probabilities = tf.nn.softmax(logits, axis=-1)
+    probabilities = tf.nn.softmax(logits, axis=-1 )
     log_probs = tf.nn.log_softmax(logits, axis=-1)
 
-    one_hot_labels = tf.one_hot(labels, depth=num_labels, dtype=tf.float32)
+    one_hot_labels = tf.one_hot(labels, depth=num_labels, dtype=tf.float32 )
 
     per_example_loss = -tf.reduce_sum(one_hot_labels * log_probs, axis=-1)
     loss = tf.reduce_mean(per_example_loss)
@@ -660,14 +664,6 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
       else:
         tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
 
-    tf.logging.info("**** Trainable Variables ****")
-    for var in tvars:
-      init_string = ""
-      if var.name in initialized_variable_names:
-        init_string = ", *INIT_FROM_CKPT*"
-      tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape,
-                      init_string)
-
     output_spec = None
     if mode == tf.estimator.ModeKeys.TRAIN:
 
@@ -683,16 +679,32 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
 
       def metric_fn(per_example_loss, label_ids, logits, is_real_example):
         predictions = tf.argmax(logits, axis=-1, output_type=tf.int32)
-        accuracy = tf.metrics.accuracy(
-            labels=label_ids, predictions=predictions, weights=is_real_example)
+
+        accuracy = tf.metrics.accuracy(labels=label_ids, predictions=predictions, weights=is_real_example)
         loss = tf.metrics.mean(values=per_example_loss, weights=is_real_example)
+        f1_score = tf.contrib.metrics.f1_score(label_ids, predictions)
+        auc = tf.metrics.auc( label_ids, predictions)
+        recall = tf.metrics.recall(label_ids, predictions)
+        precision = tf.metrics.precision(label_ids, predictions)
+        true_pos = tf.metrics.true_positives(label_ids, predictions)
+        true_neg = tf.metrics.true_negatives(label_ids, predictions)
+        false_pos = tf.metrics.false_positives(label_ids, predictions)  
+        false_neg = tf.metrics.false_negatives(label_ids, predictions)
         return {
             "eval_accuracy": accuracy,
             "eval_loss": loss,
+            "F1_Score": f1_score,
+            "auc": auc,
+            "precision": precision,
+            "recall": recall,
+            "true_positives": true_pos,
+            "true_negatives": true_neg,
+            "false_positives": false_pos,
+            "false_negatives": false_neg
         }
 
-      eval_metrics = (metric_fn,
-                      [per_example_loss, label_ids, logits, is_real_example])
+      eval_metrics = (metric_fn, [per_example_loss, label_ids, logits, is_real_example])
+
       output_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
           loss=total_loss,
