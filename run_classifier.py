@@ -572,40 +572,96 @@ def _truncate_seq_pair(tokens_a, tokens_b, max_length):
       tokens_b.pop()
 
 
-def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
-                 labels, num_labels, use_one_hot_embeddings):
-  """Creates a classification model."""
+# Maybe have a params dict with model params
+def create_model(bert_config, is_training, input_ids, input_mask, segment_ids, 
+                 labels, num_labels, FT_PARAMS):
+  
+  """ Create a classification model based on BERT """
   model = modeling.BertModel(
       config=bert_config,
       is_training=is_training,
       input_ids=input_ids,
       input_mask=input_mask,
       token_type_ids=segment_ids,
-      use_one_hot_embeddings=use_one_hot_embeddings)
+      use_one_hot_embeddings=True,  # True if use TPU
+  )
 
-  # In the demo, we are doing a simple classification task on the entire
-  # segment.
-  #
-  # If you want to use the token-level output, use model.get_sequence_output()
-  # instead.
-  
-  #output_layer = model.get_sequence_output()
-  output_layer = model.get_pooled_output()
+  model_type = FT_PARAMS[0]
+  loss_type = FT_PARAMS[1]
+  num_extra_layers = FT_PARAMS[2]
+  h_size = FT_PARAMS[3]
+
+
+  if model_type == "BiLTSM":
+    tf.logging.info("Using Bi-Directional LTSM for Fine-Tuning. %d extra layer" % (num_extra_layers)) 
+    #output layer must be rank 3 for biltsm
+    output_layer = model.get_sequence_output()
+    #Output shape of 4, 246, 1024 which is [batch_size, seq_len, input_size]
+    #seq len parameter corresponds to max_time param in bi_dynamic_rnn function
+
+    for layer in range(num_extra_layers):
+
+      #Using different variable scopes, if you want though you can just make the name
+      #"hidden" each time and the weights will be shared across layers
+      with tf.variable_scope('hidden_{}'.format(layer),reuse=tf.AUTO_REUSE):
+        
+        #num units in LTSMCell for fw and bw must match
+        cell_fw = tf.nn.rnn_cell.LSTMCell(num_units=h_size)
+        cell_fw = tf.contrib.rnn.DropoutWrapper(cell_fw, input_keep_prob = 0.9)
+
+        cell_bw = tf.nn.rnn_cell.LSTMCell(num_units=h_size)
+        cell_bw = tf.contrib.rnn.DropoutWrapper(cell_bw, input_keep_prob = 0.9)
+        outputs, states = tf.nn.bidirectional_dynamic_rnn(
+            cell_fw=cell_fw, cell_bw=cell_bw, inputs=output_layer, dtype=tf.float32)
+
+        output_layer = tf.concat(outputs,2) #Could be this too
+
+    output_layer = output_layer[:,-1,:] #Flatten output logits to [batch_size, hidden_size]
+
+  elif model_type == "MLP":
+    tf.logging.info("Using Multi-Layer Perceptron for Fine-Tuning. %d extra layer" % (num_extra_layers))  
+    final_hidden = model.get_pooled_output()
+    final_hidden_shape = modeling.get_shape_list(final_hidden, expected_rank=2)
+    batch_size = final_hidden_shape[0]
+    hidden_size = final_hidden_shape[1]
+    
+    for layer in range(num_extra_layers):
+      with tf.variable_scope('hidden_{}'.format(layer),reuse=tf.AUTO_REUSE):
+        h_weights = tf.get_variable("h{}_weights".format(layer), [h_size, hidden_size],
+                                      initializer=tf.truncated_normal_initializer(stddev=0.02))
+        h_bias = tf.get_variable("h{}_bias".format(layer), [h_size], initializer=tf.zeros_initializer())
+
+        #final_hidden_matrix = tf.reshape(final_hidden, [batch_size * seq_length, hidden_size])
+        h_logits = tf.nn.bias_add(tf.matmul(final_hidden, h_weights, transpose_b=True), h_bias)
+        h_logits = tf.nn.relu(h_logits)
+        #Dropout after activation
+        if is_training:       
+          h_logits = tf.nn.dropout(h_logits, rate=0.1) #not sure if this is needed
+        
+        #Reset values to reflect current last layer
+        final_hidden = h_logits
+        hidden_size = h_logits.shape[-1].value
+    
+    output_layer = final_hidden # Output layer for MLP
+
+  # Revert to default BERT Fine-Tuning
+  else:
+    tf.logging.info("\nUsing original BERT Model for Fine-Tuning\n") 
+    output_layer = model.get_pooled_output() #Output layer for default BERT
 
   hidden_size = output_layer.shape[-1].value
 
-  #Operation level seed to initialize the same variables each time
   output_weights = tf.get_variable(
       "output_weights", [num_labels, hidden_size],
-      initializer=tf.truncated_normal_initializer(stddev=0.02, seed = SEED)) #Operation level seed
+      initializer=tf.truncated_normal_initializer(stddev=0.02)) 
 
   output_bias = tf.get_variable(
       "output_bias", [num_labels], initializer=tf.zeros_initializer())
 
-  with tf.variable_scope("loss"):
-    if is_training:
+  with tf.variable_scope("output"):
+    if is_training and model_type != "BiLTSM": #We already do dropout in BiLTSM loop
       # I.e., 0.1 dropout
-      output_layer = tf.nn.dropout(output_layer, keep_prob=0.9, seed = SEED) #Op level seed
+      output_layer = tf.nn.dropout(output_layer, rate=0.1) 
 
     logits = tf.matmul(output_layer, output_weights, transpose_b=True)
     logits = tf.nn.bias_add(logits, output_bias)
@@ -614,15 +670,32 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
 
     one_hot_labels = tf.one_hot(labels, depth=num_labels, dtype=tf.float32 )
 
-    per_example_loss = -tf.reduce_sum(one_hot_labels * log_probs, axis=-1)
-    loss = tf.reduce_mean(per_example_loss)
+    if loss_type == 'focal_loss':
+      # Focal loss (Set default focal loss gamma to 2)
+      per_example_loss = -one_hot_labels * ((1 - probabilities) ** 2) * log_probs
+      per_example_loss = tf.reduce_sum(per_example_loss, axis=1)
 
-    return (loss, per_example_loss, logits, probabilities)
+    elif loss_type == 'binary_cross_entropy':
+        per_example_loss = tf.keras.losses.binary_crossentropy(y_true=one_hot_labels,
+                                                                          y_pred=probabilities)
+    elif loss_type == 'kld':
+        per_example_loss = tf.keras.metrics.KLDivergence(y_true=one_hot_labels,
+                                                    y_pred=probabilities)
+    elif loss_type == 'squared_hinge':
+        per_example_loss = tf.keras.losses.squared_hinge(y_true=one_hot_labels,
+                                                              y_pred=probabilities)
+    elif loss_type == 'hinge':
+        per_example_loss = tf.keras.metrics.hinge(y_true=one_hot_labels,
+                                                      y_pred=probabilities)
+    else:   # Fallback to cross-entropy
+        per_example_loss = -tf.reduce_sum(one_hot_labels * log_probs, axis=-1)
+
+    loss = tf.reduce_mean(per_example_loss)
+  return loss, per_example_loss, log_probs, probabilities
 
 
 def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
-                     num_train_steps, num_warmup_steps, use_tpu,
-                     use_one_hot_embeddings):
+                     num_train_steps, num_warmup_steps, use_tpu, ft_params):
   """Returns `model_fn` closure for TPUEstimator."""
 
   def model_fn(features, labels, mode, params):  # pylint: disable=unused-argument
@@ -643,11 +716,14 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
       is_real_example = tf.ones(tf.shape(label_ids), dtype=tf.float32)
 
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
+    
+    loss_type = ft_params[1]
+    tf.logging.info("\nUsing loss type:%s" % (loss_type)) 
 
-    (total_loss, per_example_loss, logits, probabilities) = create_model(
-        bert_config, is_training, input_ids, input_mask, segment_ids, label_ids,
-        num_labels, use_one_hot_embeddings)
-
+    (total_loss, per_example_loss, log_probs, probabilities) = create_model(
+        bert_config, is_training, input_ids, input_mask, segment_ids, label_ids, num_labels,
+        FT_PARAMS)
+    
     tvars = tf.trainable_variables()
     initialized_variable_names = {}
     scaffold_fn = None
@@ -677,8 +753,8 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
           scaffold_fn=scaffold_fn)
     elif mode == tf.estimator.ModeKeys.EVAL:
 
-      def metric_fn(per_example_loss, label_ids, logits, is_real_example):
-        predictions = tf.argmax(logits, axis=-1, output_type=tf.int32)
+      def metric_fn(per_example_loss, label_ids, log_probs, is_real_example):
+        predictions = tf.argmax(log_probs, axis=-1, output_type=tf.int32)
 
         accuracy = tf.compat.v1.metrics.accuracy(labels=label_ids, predictions=predictions, weights=is_real_example)
         loss = tf.compat.v1.metrics.mean(values=per_example_loss, weights=is_real_example)
@@ -703,7 +779,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
             "false_negatives": false_neg
         }
 
-      eval_metrics = (metric_fn, [per_example_loss, label_ids, logits, is_real_example])
+      eval_metrics = (metric_fn, [per_example_loss, label_ids, log_probs, is_real_example])
 
       output_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
@@ -718,7 +794,6 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
     return output_spec
 
   return model_fn
-
 
 # This function is not used by this file but is still used by the Colab and
 # people who depend on it.
