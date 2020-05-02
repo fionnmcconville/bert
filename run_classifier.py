@@ -771,7 +771,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
 
     (total_loss, per_example_loss, log_probs, probabilities) = create_model(
         bert_config, is_training, input_ids, input_mask, segment_ids, label_ids, num_labels,
-        FT_PARAMS)
+        ft_params)
     
     tvars = tf.trainable_variables()
     initialized_variable_names = {}
